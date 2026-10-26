@@ -40,3 +40,24 @@ export async function resolveBind(bind: string): Promise<string> {
   }
   return ip;
 }
+
+/**
+ * Como resolveBind, mas com bind "tailscale" espera o Tailscale conectar (notebook que acabou de ligar
+ * ou trocou de rede). Para outros valores de bind, não espera.
+ */
+export async function resolveBindWithWait(bind: string, waitS: number, onWait?: (left: number) => void): Promise<string> {
+  if (bind !== "tailscale" || waitS <= 0) return resolveBind(bind);
+  const deadline = Date.now() + waitS * 1000;
+  let announced = false;
+  for (;;) {
+    const ip = await tailscaleIp();
+    if (ip) return ip;
+    const left = Math.round((deadline - Date.now()) / 1000);
+    if (left <= 0) return resolveBind(bind); // lança o erro explicativo
+    if (!announced) {
+      onWait?.(left);
+      announced = true;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}

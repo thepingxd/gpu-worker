@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import { z } from "zod";
 import { configPath, dataDir, type Config, type TokenEntry } from "./config.js";
-import { detectGpu } from "./gpu.js";
+import { configureGpu, detectGpuReport } from "./gpu.js";
 import { InputStore, type InputMeta } from "./inputs.js";
 import { JobManager, type Job } from "./jobs.js";
+import { KeepAwake, getPowerState } from "./power.js";
 import { ComfyRunner } from "./runners/comfyui.js";
 import type { Runner } from "./runners/types.js";
 import { sign } from "./signing.js";
@@ -12,6 +13,7 @@ import { VERSION } from "./version.js";
 export class App {
   inputs: InputStore;
   jobs: JobManager;
+  keepAwake: KeepAwake;
   runners: Runner[] = [];
   baseUrl: string;
   private tokenCache: { at: number; tokens: TokenEntry[] };
@@ -23,9 +25,11 @@ export class App {
     const data = dataDir();
     fs.mkdirSync(data, { recursive: true });
     this.baseUrl = (cfg.public_url ?? `http://${host.includes(":") ? `[${host}]` : host}:${cfg.port}`).replace(/\/+$/, "");
+    configureGpu({ comfyuiUrl: cfg.comfyui.enabled ? cfg.comfyui.url : null });
     if (cfg.comfyui.enabled) this.runners.push(new ComfyRunner(cfg));
     this.inputs = new InputStore(cfg, data);
-    this.jobs = new JobManager(cfg, data, this.runners, this.inputs);
+    this.keepAwake = new KeepAwake(cfg.power.keep_awake);
+    this.jobs = new JobManager(cfg, data, this.runners, this.inputs, this.keepAwake);
     this.tokenCache = { at: Date.now(), tokens: cfg.tokens };
   }
 
@@ -94,7 +98,14 @@ export class App {
   }
 
   async capabilities() {
-    const gpu = await detectGpu(0);
+    const { gpu, warnings: gpuWarnings } = await detectGpuReport(0);
+    const power = await getPowerState();
+    const warnings = [...gpuWarnings];
+    if (power.on_battery) {
+      warnings.push(
+        `A máquina está na bateria${power.percent !== null ? ` (${power.percent}%)` : ""}. Jobs longos podem ser limitados pelo sistema; ${this.cfg.power.on_battery === "block" ? "novos jobs são recusados" : `jobs são recusados abaixo de ${this.cfg.power.min_battery_percent}%`}.`,
+      );
+    }
     const jobs = [];
     for (const r of this.runners) {
       const probe = await r.probe();
@@ -112,6 +123,15 @@ export class App {
       name: "gpu-worker",
       version: VERSION,
       gpu,
+      warnings,
+      power: {
+        has_battery: power.has_battery,
+        on_battery: power.on_battery,
+        battery_percent: power.percent,
+        policy: this.cfg.power.on_battery,
+        min_battery_percent: this.cfg.power.min_battery_percent,
+        keep_awake: this.cfg.power.keep_awake,
+      },
       status: this.jobs.isBusy() ? "busy" : "idle",
       queue_length: this.jobs.queueLength(),
       limits: {

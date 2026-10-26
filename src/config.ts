@@ -16,8 +16,18 @@ export interface Config {
   port: number;
   /** URL base usada nos links assinados. Se null, usa http://<bind>:<port>. */
   public_url: string | null;
+  /** Quanto esperar (s) o Tailscale conectar ao iniciar, antes de desistir. Só vale com bind "tailscale". */
+  tailscale_wait_s: number;
   tokens: TokenEntry[];
   signing_secret: string;
+  power: {
+    /** "block" recusa jobs enquanto a máquina estiver na bateria. */
+    on_battery: "allow" | "block";
+    /** Na bateria, recusa jobs abaixo desta carga (%). 0 desliga. */
+    min_battery_percent: number;
+    /** Impede a suspensão por inatividade enquanto há job rodando. */
+    keep_awake: boolean;
+  };
   comfyui: { enabled: boolean; url: string; default_model: string | null };
   limits: {
     max_input_mb: number;
@@ -45,6 +55,8 @@ export const DEFAULTS: Omit<Config, "tokens" | "signing_secret"> = {
   bind: "tailscale",
   port: 8787,
   public_url: null,
+  tailscale_wait_s: 120,
+  power: { on_battery: "allow", min_battery_percent: 20, keep_awake: true },
   comfyui: { enabled: true, url: "http://127.0.0.1:8188", default_model: null },
   limits: {
     max_input_mb: 512,

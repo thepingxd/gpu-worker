@@ -1,4 +1,4 @@
-# gpu-worker: SPEC (rascunho v0.2)
+# gpu-worker: SPEC (rascunho v0.3)
 
 > Nome: `gpu-worker`. Licença: dupla, **MIT OR Apache-2.0** (o usuário escolhe uma). Este documento cobre só o MVP.
 
@@ -213,6 +213,14 @@ Proteções:
 - Modelos são baixados sob demanda, com checksum, e a CLI informa o tamanho antes.
 - ComfyUI e Blender podem ser detectados no sistema ou instalados em pasta gerenciada pelo daemon.
 - Plataformas: Windows e Linux com NVIDIA primeiro. AMD e macOS ficam como futuro.
+
+## 12.1 Notebooks (adicionado na v0.3)
+
+- **Detecção de GPU:** o `list_capabilities` obtém a GPU do ComfyUI (`/system_stats`), que é o dispositivo que de fato roda os jobs, com `nvidia-smi` como complemento (driver) e fallback. Campos novos: `gpu.backend`, `gpu.source` e `warnings[]` (ex: ComfyUI em CPU com NVIDIA presente).
+- **Energia:** `list_capabilities.power` informa bateria e política. Config `power.on_battery` (`allow|block`) e `power.min_battery_percent`; violar a política devolve `JOB_UNAVAILABLE`. Checagem só no `submit_job`.
+- **Keep-awake:** inibe a suspensão por inatividade enquanto há fila ou job (config `power.keep_awake`). Fechar a tampa não é coberto.
+- **Rede:** com `bind: "tailscale"`, espera o Tailscale por `tailscale_wait_s` ao iniciar.
+- **Autostart:** `gpu-worker service install|uninstall|status` (systemd de usuário, launchd, Tarefa Agendada do Windows).
 
 ## 13. Critérios de aceite do MVP
 

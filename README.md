@@ -2,12 +2,12 @@
 
 Daemon open source que roda na sua máquina, expõe um servidor **MCP** e deixa agentes remotos (Claude, OpenClaw, Hermes, qualquer cliente MCP) usarem a **sua GPU** para gerar imagens e devolver o resultado por uma URL temporária. O agente pode estar num servidor; a GPU é a do usuário.
 
-Estado: **MVP v0.1** (ComfyUI). Blender vem logo depois. Veja `SPEC.md` para o desenho completo.
+Estado: **MVP v0.2** (ComfyUI). Blender vem logo depois. Veja `SPEC.md` para o desenho completo.
 
 ## Requisitos
 
 - Node.js 20+ (testado em 22)
-- GPU NVIDIA com drivers (`nvidia-smi` no PATH)
+- Uma GPU que o ComfyUI consiga usar. O alvo do MVP é **NVIDIA** (drivers + `nvidia-smi`); AMD, Intel Arc e Apple Silicon devem funcionar porque a detecção pergunta ao próprio ComfyUI, mas **não foram testados**. Vídeo integrado só serve para testar o fluxo (a geração roda em CPU e é muito lenta)
 - [ComfyUI](https://github.com/comfyanonymous/ComfyUI) rodando (padrão `http://127.0.0.1:8188`) com **ao menos um checkpoint** instalado
 - [Tailscale](https://tailscale.com/) instalado e conectado, na máquina da GPU e na máquina do agente (para teste só local na mesma máquina, não precisa)
 
@@ -58,6 +58,37 @@ Qualquer cliente MCP com transporte HTTP (streamable):
 
 O agente precisa estar na mesma tailnet. Um token por agente: `gpu-worker token add <nome>` / `list` / `revoke <nome>`.
 
+## Notebooks
+
+O daemon foi ajustado para rodar em notebook:
+
+- **GPU detectada pelo ComfyUI** (`/system_stats`), que é quem de fato usa o dispositivo; o `nvidia-smi` complementa (versão do driver) e serve de fallback. Se o ComfyUI estiver em CPU enquanto o `nvidia-smi` vê uma placa NVIDIA (notebook híbrido com o ComfyUI na GPU errada), o `list_capabilities` e o `doctor` mostram um aviso.
+- **Keep-awake:** enquanto há job rodando (ou na fila), o daemon impede a suspensão por inatividade (`systemd-inhibit` no Linux, `caffeinate` no macOS, `SetThreadExecutionState` no Windows). **Fechar a tampa ainda suspende** na maioria dos sistemas: ajuste "ao fechar a tampa" para "não fazer nada" enquanto na tomada.
+- **Bateria:** `list_capabilities` informa `power` (na bateria, %). Fora da tomada, jobs são recusados abaixo de `power.min_battery_percent` (padrão 20%); com `power.on_battery: "block"`, são recusados sempre. A checagem é só na hora de enfileirar; um job já em execução não é interrompido se a carga cair.
+- **Tailscale:** com `bind: "tailscale"`, o daemon espera até `tailscale_wait_s` (padrão 120 s) o Tailscale conectar, em vez de falhar ao ligar o notebook ou trocar de rede.
+
+Configuração (em `config.json`):
+
+```json
+{
+  "tailscale_wait_s": 120,
+  "power": { "on_battery": "allow", "min_battery_percent": 20, "keep_awake": true }
+}
+```
+
+Para testar a política de bateria sem desligar da tomada: `GPU_WORKER_FAKE_POWER=battery:15 node dist/cli.js start` (também `ac:80` e `none`).
+
+### Iniciar com o sistema
+
+```bash
+node dist/cli.js service install     # systemd (usuário) | launchd | Tarefa Agendada do Windows
+node dist/cli.js service status
+node dist/cli.js service uninstall
+node dist/cli.js service install --dry-run   # só mostra o que seria criado
+```
+
+Roda o `start` no login e reinicia se cair. No Linux, para subir no boot sem login: `sudo loginctl enable-linger $USER`. No Windows a tarefa é criada permitindo rodar na bateria. Logs: `journalctl --user -u gpu-worker -f` (Linux), `~/.gpu-worker/daemon.log` (macOS e Windows; no macOS sem rotação).
+
 ## Tools MCP
 
 | Tool | O que faz |
@@ -85,7 +116,7 @@ Erros: `INVALID_PARAMS`, `INSUFFICIENT_VRAM`, `JOB_UNAVAILABLE`, `INPUT_NOT_FOUN
 - Tipo do arquivo validado pelo conteúdo (magic bytes), não pela extensão.
 - Limpeza automática de inputs e outputs após 24 h (`pin_input` mantém um input).
 
-## Limitações conhecidas do v0.1
+## Limitações conhecidas
 
 - **Testado só contra um ComfyUI falso** (`npm run mock`), não contra ComfyUI/GPU reais. Os workflows seguem a API padrão do ComfyUI, mas é o primeiro teste real que vai dizer se algum node ou nome de campo precisa de ajuste. Se falhar, mande o erro de `get_job`/`logs_tail`.
 - **Blender ainda não está incluído** (próximo job).
@@ -93,7 +124,8 @@ Erros: `INVALID_PARAMS`, `INSUFFICIENT_VRAM`, `JOB_UNAVAILABLE`, `INPUT_NOT_FOUN
 - A checagem de VRAM usa a **VRAM total** da GPU (a livre pode estar ocupada pelo próprio ComfyUI, com modelos carregados).
 - Sem modo de aprovação local por job ainda.
 - `fetch_input` é síncrono (a chamada espera o download).
-- Plataformas-alvo: Windows e Linux com NVIDIA. AMD/macOS não foram tentados.
+- **Só testei em Linux.** A detecção de bateria, o keep-awake e a instalação do serviço no **Windows e macOS** foram escritos a partir da documentação dos sistemas e testados apenas com saídas simuladas (parsers e arquivos gerados; o Linux também foi testado com `systemctl` e `systemd-inhibit` simulados). Se algo falhar nessas plataformas, mande a saída de `doctor` e do `service`.
+- AMD, Intel e Apple Silicon: a detecção usa o ComfyUI, mas nunca rodei em nenhuma dessas placas.
 - Tokens revogados deixam de valer em até ~5 s no daemon em execução.
 
 ## Licença

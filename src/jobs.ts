@@ -4,6 +4,7 @@ import type { Config } from "./config.js";
 import { WorkerError, type ErrorCode } from "./errors.js";
 import { detectGpu } from "./gpu.js";
 import type { InputStore } from "./inputs.js";
+import { getPowerState, type KeepAwake } from "./power.js";
 import type { Runner } from "./runners/types.js";
 import { atomicWriteFile, hashFile, log, nowIso, randomId, rmrf } from "./util.js";
 
@@ -48,6 +49,7 @@ export class JobManager {
     private dataDir: string,
     private runners: Runner[],
     private inputs: InputStore,
+    private keepAwake: KeepAwake,
   ) {
     this.file = path.join(dataDir, "jobs.json");
     this.outRoot = path.join(dataDir, "outputs");
@@ -121,6 +123,7 @@ export class JobManager {
         `Este job exige ao menos ${runner.minVramMb} MB de VRAM; a GPU tem ${gpu.vram_total_mb} MB.`,
       );
     }
+    await this.checkPower();
     await runner.precheck(parsed.data, this.inputs);
     if (this.queueLength() >= this.cfg.limits.max_queue) {
       throw new WorkerError("QUEUE_FULL", `Fila cheia (${this.cfg.limits.max_queue} jobs).`);
@@ -144,6 +147,21 @@ export class JobManager {
     log(`job ${job.id} (${type}) na fila`);
     void this.pump();
     return job;
+  }
+
+  private async checkPower() {
+    const pw = await getPowerState();
+    if (!pw.on_battery) return;
+    const pol = this.cfg.power;
+    if (pol.on_battery === "block") {
+      throw new WorkerError("JOB_UNAVAILABLE", "A máquina está na bateria e a política power.on_battery=block recusa jobs. Ligue na tomada.");
+    }
+    if (pol.min_battery_percent > 0 && pw.percent !== null && pw.percent < pol.min_battery_percent) {
+      throw new WorkerError(
+        "JOB_UNAVAILABLE",
+        `Bateria em ${pw.percent}% (mínimo ${pol.min_battery_percent}% fora da tomada). Ligue na tomada para continuar.`,
+      );
+    }
   }
 
   get(id: string): Job {
@@ -187,6 +205,7 @@ export class JobManager {
   private async pump() {
     if (this.busy) return;
     this.busy = true;
+    this.keepAwake.acquire();
     try {
       for (;;) {
         const next = [...this.jobs.values()]
@@ -196,6 +215,7 @@ export class JobManager {
         await this.execute(next);
       }
     } finally {
+      this.keepAwake.release();
       this.busy = false;
     }
   }

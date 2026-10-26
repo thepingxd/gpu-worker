@@ -6,6 +6,7 @@ import zlib from "node:zlib";
 
 const PORT = Number(process.env.MOCK_PORT ?? 8188);
 const DELAY = Number(process.env.MOCK_DELAY_MS ?? 2000);
+const DEVICE = process.env.MOCK_DEVICE ?? "cuda"; // cuda | cpu | mps
 
 function crc32(buf) {
   let c, crc = 0xffffffff;
@@ -83,6 +84,15 @@ http
   .createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     const p = url.pathname;
+    if (p === "/system_stats") {
+      const GiB = 1024 ** 3;
+      const devices = {
+        cuda: [{ name: "cuda:0 Mock GeForce RTX 4060 Laptop GPU : cudaMallocAsync", type: "cuda", index: 0, vram_total: 8 * GiB, vram_free: 6.5 * GiB }],
+        mps: [{ name: "mps:0 Apple M2", type: "mps", index: 0, vram_total: 16 * GiB, vram_free: 10 * GiB }],
+        cpu: [{ name: "cpu", type: "cpu", index: null, vram_total: 16 * GiB, vram_free: 8 * GiB }],
+      }[DEVICE] ?? [];
+      return send(res, 200, { system: { os: "mock", comfyui_version: "mock" }, devices });
+    }
     if (p === "/object_info/CheckpointLoaderSimple") {
       return send(res, 200, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [["mock-sd15.safetensors"]] } } } });
     }

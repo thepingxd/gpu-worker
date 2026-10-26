@@ -1,6 +1,6 @@
 {
   "name": "gpu-worker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP daemon that lets remote agents use your local GPU (ComfyUI, Blender) and get clean results back.",
   "license": "(MIT OR Apache-2.0)",
   "type": "module",

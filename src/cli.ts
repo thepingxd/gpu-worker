@@ -13,10 +13,12 @@ import {
   saveConfig,
   type Config,
 } from "./config.js";
-import { detectGpu } from "./gpu.js";
+import { configureGpu, detectGpuReport } from "./gpu.js";
 import { App } from "./app.js";
 import { createHttpServer } from "./server.js";
-import { resolveBind, tailscaleIp } from "./tailscale.js";
+import { getPowerState } from "./power.js";
+import { currentPlanOptions, planService, runService, type ServicePlatform } from "./service.js";
+import { resolveBind, resolveBindWithWait, tailscaleIp } from "./tailscale.js";
 import { nowIso, log } from "./util.js";
 import { VERSION } from "./version.js";
 
@@ -36,6 +38,7 @@ Uso:
   gpu-worker start
   gpu-worker doctor
   gpu-worker token add <nome> | list | revoke <nome>
+  gpu-worker service install | uninstall | status [--dry-run]   (inicia o daemon no login)
 
 Config e dados ficam em ${homeDir()} (mude com GPU_WORKER_HOME).`;
 
@@ -86,7 +89,9 @@ Próximos passos:
 
 async function start() {
   const cfg = loadConfig();
-  const host = await resolveBind(cfg.bind);
+  const host = await resolveBindWithWait(cfg.bind, cfg.tailscale_wait_s, (left) =>
+    log(`aguardando o Tailscale conectar (até ${left}s)...`),
+  );
   if (!net.isIP(host)) throw new Error(`bind inválido: ${host}`);
   if (cfg.fetch.allow_private_addresses) log("AVISO: fetch.allow_private_addresses=true (proteção anti-SSRF desligada; use só em testes)");
   const app = new App(cfg, host);
@@ -95,9 +100,14 @@ async function start() {
     server.once("error", reject);
     server.listen(cfg.port, host, resolve);
   });
-  const gpu = await detectGpu(0);
+  const { gpu, warnings } = await detectGpuReport(0);
   log(`gpu-worker ${VERSION} ouvindo em ${app.baseUrl}  (MCP: ${app.baseUrl}/mcp)`);
-  log(gpu ? `GPU: ${gpu.name}, ${gpu.vram_total_mb} MB de VRAM, driver ${gpu.driver}` : "GPU NVIDIA não detectada (nvidia-smi); jobs seguem sem checagem de VRAM");
+  log(gpu ? `GPU: ${gpu.name}, ${gpu.vram_total_mb} MB de VRAM (${gpu.backend}, via ${gpu.source})${gpu.driver ? ", driver " + gpu.driver : ""}` : "GPU não detectada; jobs seguem sem checagem de VRAM");
+  for (const w of warnings) log(`AVISO: ${w}`);
+  const pw = await getPowerState(0);
+  if (pw.has_battery) {
+    log(`Energia: ${pw.on_battery === null ? "fonte desconhecida" : pw.on_battery ? "na bateria" : "na tomada"}${pw.percent !== null ? `, ${pw.percent}%` : ""}; keep-awake ${cfg.power.keep_awake ? "ligado" : "desligado"}`);
+  }
   for (const r of app.runners) {
     const p = await r.probe();
     log(`${r.type}: ${p.available ? "disponível" : "indisponível — " + p.reason}`);
@@ -133,8 +143,13 @@ async function doctor() {
   }
   const cfg = loadConfig();
   line(true, "Config", configPath());
-  const gpu = await detectGpu(0);
-  line(gpu ? true : null, "GPU NVIDIA", gpu ? `${gpu.name}, ${gpu.vram_total_mb} MB, driver ${gpu.driver}` : "nvidia-smi não encontrado ou sem GPU");
+  configureGpu({ comfyuiUrl: cfg.comfyui.enabled ? cfg.comfyui.url : null });
+  const { gpu, warnings } = await detectGpuReport(0);
+  line(gpu ? true : null, "GPU", gpu ? `${gpu.name}, ${gpu.vram_total_mb} MB (${gpu.backend}, via ${gpu.source})${gpu.driver ? ", driver " + gpu.driver : ""}` : "nenhuma GPU detectada");
+  for (const w of warnings) line(null, "GPU", w);
+  const pw = await getPowerState(0);
+  line(true, "Energia", !pw.has_battery ? "sem bateria (desktop)" : `${pw.on_battery === null ? "fonte desconhecida" : pw.on_battery ? "na bateria" : "na tomada"}${pw.percent !== null ? `, ${pw.percent}%` : ""}; política: ${cfg.power.on_battery}, mínimo ${cfg.power.min_battery_percent}%`);
+  if (pw.has_battery) line(null, "Suspensão", "o keep-awake evita a suspensão por inatividade, mas fechar a tampa ainda suspende na maioria dos sistemas; ajuste \"ao fechar a tampa\" para \"nada\" quando na tomada");
   try {
     const host = await resolveBind(cfg.bind);
     line(true, "Endereço de bind", `${host}:${cfg.port}`);
@@ -173,8 +188,30 @@ function token() {
   }
 }
 
+async function service() {
+  const action = args[1];
+  if (action !== "install" && action !== "uninstall" && action !== "status") {
+    console.log("Uso: gpu-worker service install | uninstall | status [--dry-run]");
+    return;
+  }
+  const dry = has("dry-run");
+  const opts = currentPlanOptions();
+  const forced = flag("platform");
+  if (forced) {
+    if (!dry) throw new Error("--platform só vale junto com --dry-run (para ver os arquivos de outro sistema).");
+    if (!["linux", "darwin", "win32"].includes(forced)) throw new Error("--platform: linux, darwin ou win32.");
+    opts.platform = forced as ServicePlatform;
+  }
+  if (!["linux", "darwin", "win32"].includes(opts.platform)) throw new Error(`Sistema não suportado para serviço: ${opts.platform}`);
+  if (action === "install" && !dry && !configExists()) {
+    throw new Error(`Config não encontrada em ${configPath()}. Rode 'gpu-worker init' antes de instalar o serviço.`);
+  }
+  await runService(action, planService(opts), dry);
+}
+
 try {
   if (cmd === "init") await init();
+  else if (cmd === "service") await service();
   else if (cmd === "start") await start();
   else if (cmd === "doctor") await doctor();
   else if (cmd === "token") token();
