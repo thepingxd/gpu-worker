@@ -1,0 +1,34 @@
+{
+  "name": "gpu-worker",
+  "version": "0.1.0",
+  "description": "MCP daemon that lets remote agents use your local GPU (ComfyUI, Blender) and get clean results back.",
+  "license": "(MIT OR Apache-2.0)",
+  "type": "module",
+  "bin": {
+    "gpu-worker": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js start",
+    "doctor": "node dist/cli.js doctor",
+    "smoke": "node scripts/smoke.mjs",
+    "mock": "node scripts/mock-comfyui.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
